@@ -95,9 +95,8 @@ export async function importFiles(
   await ensureProjectDirs(projectDir)
   let paths = filePaths
   if (!paths || paths.length === 0) {
-    const win = BrowserWindow.getFocusedWindow()
-    const result = await dialog.showOpenDialog(win!, {
-      properties: ['openFile', 'multiSelections'],
+    const opts = {
+      properties: ['openFile', 'multiSelections'] as Array<'openFile' | 'multiSelections'>,
       filters: [
         {
           name: 'Media',
@@ -120,7 +119,9 @@ export async function importFiles(
           ]
         }
       ]
-    })
+    }
+    const win = dialogParent()
+    const result = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
     if (result.canceled || result.filePaths.length === 0) return []
     paths = result.filePaths
   }
@@ -220,41 +221,51 @@ export async function saveRecording(
   }
 }
 
+function dialogParent(): BrowserWindow | undefined {
+  return BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? undefined
+}
+
 export async function pickExportPath(defaultName = 'export.mp4'): Promise<string | null> {
-  const win = BrowserWindow.getFocusedWindow()
-  const result = await dialog.showSaveDialog(win!, {
+  const opts = {
     defaultPath: defaultName,
     filters: [{ name: 'MP4 Video', extensions: ['mp4'] }]
-  })
+  }
+  const win = dialogParent()
+  const result = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts)
   if (result.canceled || !result.filePath) return null
   return result.filePath
 }
 
 export async function pickProjectDir(): Promise<string | null> {
-  const win = BrowserWindow.getFocusedWindow()
-  const result = await dialog.showOpenDialog(win!, {
-    properties: ['openDirectory', 'createDirectory']
-  })
+  const opts = {
+    properties: ['openDirectory', 'createDirectory'] as Array<'openDirectory' | 'createDirectory'>
+  }
+  const win = dialogParent()
+  const result = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
   if (result.canceled || result.filePaths.length === 0) return null
   return result.filePaths[0]
 }
 
 export async function pickSaveProjectPath(defaultName = 'project.json'): Promise<string | null> {
-  const win = BrowserWindow.getFocusedWindow()
-  const result = await dialog.showSaveDialog(win!, {
+  const opts = {
+    title: 'Save project',
     defaultPath: defaultName,
     filters: [{ name: 'VTube Maker Project', extensions: ['json'] }]
-  })
+  }
+  const win = dialogParent()
+  const result = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts)
   if (result.canceled || !result.filePath) return null
   return result.filePath.endsWith('.json') ? result.filePath : `${result.filePath}.json`
 }
 
 export async function pickOpenProjectPath(): Promise<string | null> {
-  const win = BrowserWindow.getFocusedWindow()
-  const result = await dialog.showOpenDialog(win!, {
-    properties: ['openFile'],
+  const opts = {
+    title: 'Open project',
+    properties: ['openFile'] as Array<'openFile'>,
     filters: [{ name: 'VTube Maker Project', extensions: ['json'] }]
-  })
+  }
+  const win = dialogParent()
+  const result = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
   if (result.canceled || result.filePaths.length === 0) return null
   return result.filePaths[0]
 }

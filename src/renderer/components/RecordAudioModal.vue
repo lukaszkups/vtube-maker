@@ -70,14 +70,18 @@ function onStop(): void {
 }
 
 async function onSave(): Promise<void> {
-  if (!pendingBuffer.value) return
+  if (!pendingBuffer.value || saving.value) return
   saving.value = true
+  const buffer = pendingBuffer.value
   try {
-    await saveBuffer(pendingBuffer.value)
+    await saveBuffer(buffer)
     pendingBuffer.value = null
+    saving.value = false
+    // Close after successful save (parent also listens to @saved)
     emit('saved')
     emit('close')
-  } finally {
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Failed to save recording'
     saving.value = false
   }
 }

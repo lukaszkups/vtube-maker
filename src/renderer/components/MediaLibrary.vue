@@ -5,7 +5,9 @@ import WaveformThumb from './WaveformThumb.vue'
 import TextLabelModal from './TextLabelModal.vue'
 import RecordAudioModal from './RecordAudioModal.vue'
 import ConfirmModal from './ConfirmModal.vue'
-import type { TextStyle } from '@shared/types'
+import type { Asset, AssetType, TextStyle } from '@shared/types'
+
+type LibraryFilter = 'all' | 'audio' | 'video' | 'images' | 'labels'
 
 const store = useProjectStore()
 const textOpen = ref(false)
@@ -14,10 +16,32 @@ const editingAssetId = ref<string | null>(null)
 const editInitial = ref<TextStyle | null>(null)
 const pendingDeleteId = ref<string | null>(null)
 const pendingDeleteName = ref('')
+const filter = ref<LibraryFilter>('all')
+
+const filters: { id: LibraryFilter; label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'audio', label: 'Audio' },
+  { id: 'video', label: 'Video' },
+  { id: 'images', label: 'Images' },
+  { id: 'labels', label: 'Labels' }
+]
 
 const deleteMessage = computed(
   () =>
     `Remove "${pendingDeleteName.value}" from the library? Clips using it will also be removed.`
+)
+
+function matchesFilter(asset: Asset, f: LibraryFilter): boolean {
+  if (f === 'all') return true
+  if (f === 'audio') return asset.type === 'audio'
+  if (f === 'video') return asset.type === 'video'
+  if (f === 'images') return asset.type === 'image' || asset.type === 'gif'
+  if (f === 'labels') return asset.type === 'text'
+  return true
+}
+
+const filteredAssets = computed(() =>
+  store.project.assets.filter((a) => matchesFilter(a, filter.value))
 )
 
 function onDragStart(e: DragEvent, assetId: string): void {
@@ -48,6 +72,15 @@ function onSaveText(style: TextStyle): void {
   textOpen.value = false
 }
 
+function closeRecordModal(): void {
+  recordOpen.value = false
+}
+
+function onRecordingSaved(): void {
+  recordOpen.value = false
+  filter.value = 'audio'
+}
+
 function requestDelete(assetId: string): void {
   const asset = store.getAsset(assetId)
   if (!asset) return
@@ -67,6 +100,12 @@ function cancelDelete(): void {
   pendingDeleteId.value = null
   pendingDeleteName.value = ''
 }
+
+function typeLabel(type: AssetType): string {
+  if (type === 'text') return 'label'
+  if (type === 'gif') return 'image'
+  return type
+}
 </script>
 
 <template>
@@ -80,9 +119,23 @@ function cancelDelete(): void {
       <button type="button" @click="openNewText()">Text</button>
     </div>
 
-    <ul v-if="store.project.assets.length" class="list">
+    <div class="filters" role="tablist" aria-label="Library filters">
+      <button
+        v-for="f in filters"
+        :key="f.id"
+        type="button"
+        role="tab"
+        :aria-selected="filter === f.id"
+        :class="{ active: filter === f.id }"
+        @click="filter = f.id"
+      >
+        {{ f.label }}
+      </button>
+    </div>
+
+    <ul v-if="filteredAssets.length" class="list">
       <li
-        v-for="asset in store.project.assets"
+        v-for="asset in filteredAssets"
         :key="asset.id"
         class="item"
         draggable="true"
@@ -105,7 +158,7 @@ function cancelDelete(): void {
         <div class="meta">
           <div class="name" :title="asset.name">{{ asset.name }}</div>
           <div class="sub">
-            {{ asset.type }}
+            {{ typeLabel(asset.type) }}
             <template v-if="asset.durationMs"> · {{ Math.round(asset.durationMs / 100) / 10 }}s</template>
           </div>
         </div>
@@ -120,6 +173,9 @@ function cancelDelete(): void {
         </button>
       </li>
     </ul>
+    <p v-else-if="store.project.assets.length" class="empty">
+      No items in this filter. Try another filter or import more media.
+    </p>
     <p v-else class="empty">
       Import media, record audio (MP3), or create a text label. Drag items onto the timeline.
     </p>
@@ -131,7 +187,11 @@ function cancelDelete(): void {
       @close="textOpen = false"
       @save="onSaveText"
     />
-    <RecordAudioModal :open="recordOpen" @close="recordOpen = false" />
+    <RecordAudioModal
+      :open="recordOpen"
+      @close="closeRecordModal"
+      @saved="onRecordingSaved"
+    />
     <ConfirmModal
       :open="!!pendingDeleteId"
       title="Remove library item"
@@ -160,7 +220,7 @@ function cancelDelete(): void {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .actions button {
@@ -168,6 +228,28 @@ function cancelDelete(): void {
   min-width: 0;
   padding: 6px 8px;
   font-size: 12px;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.filters button {
+  padding: 3px 8px;
+  font-size: 11px;
+  border-radius: 4px;
+  background: transparent;
+  border-color: var(--border);
+  color: var(--muted);
+}
+
+.filters button.active {
+  background: var(--bg-elevated);
+  border-color: var(--accent);
+  color: var(--text);
 }
 
 .list {

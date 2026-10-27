@@ -39,12 +39,31 @@ export const useProjectStore = defineStore('project', () => {
   const projectFilePath = ref('')
   const history = ref<Project[]>([])
   const historySuspended = ref(false)
+  const saveStatus = ref<string | null>(null)
+  let saveStatusTimer: ReturnType<typeof setTimeout> | null = null
   const exportProgress = ref<{
     phase: string
     currentFrame: number
     totalFrames: number
     message?: string
   } | null>(null)
+
+  function plainProject(): Project {
+    return cloneProject(project.value)
+  }
+
+  function flashSaveStatus(message: string): void {
+    saveStatus.value = message
+    if (saveStatusTimer) clearTimeout(saveStatusTimer)
+    saveStatusTimer = setTimeout(() => {
+      saveStatus.value = null
+      saveStatusTimer = null
+    }, 2500)
+  }
+
+  function isDefaultProjectFile(path: string): boolean {
+    return /[/\\]projects[/\\]default[/\\]project\.json$/i.test(path)
+  }
 
   const selectedClip = computed(() =>
     project.value.clips.find((c) => c.id === selectedClipId.value) ?? null
@@ -99,7 +118,7 @@ export const useProjectStore = defineStore('project', () => {
 
   function endGesture(): void {
     resumeHistory()
-    void save()
+    void persist()
   }
 
   function undo(): void {
@@ -112,7 +131,7 @@ export const useProjectStore = defineStore('project', () => {
     }
     mediaUrls.value = {}
     void ensureMediaUrls()
-    void save()
+    void persist()
   }
 
   async function refreshMediaUrl(asset: Asset): Promise<string> {
@@ -144,25 +163,62 @@ export const useProjectStore = defineStore('project', () => {
     await applyLoadedProject(loaded)
   }
 
-  async function save(): Promise<string> {
-    const path = await window.api.saveProject(project.value)
-    projectFilePath.value = path
-    return path
+  /** Silent disk write used by autosave / undo. Always sends a plain JSON clone (Vue proxies break IPC). */
+  async function persist(): Promise<string | null> {
+    try {
+      const path = await window.api.saveProject(plainProject())
+      projectFilePath.value = path
+      return path
+    } catch (e) {
+      console.error('persist failed', e)
+      return null
+    }
+  }
+
+  async function save(): Promise<string | null> {
+    try {
+      // First explicit save: ask for a location instead of only writing to app data
+      if (!projectFilePath.value || isDefaultProjectFile(projectFilePath.value)) {
+        return saveAs()
+      }
+      const path = await persist()
+      if (path) flashSaveStatus(`Saved ${path.split(/[/\\]/).pop()}`)
+      else flashSaveStatus('Save failed')
+      return path
+    } catch (e) {
+      flashSaveStatus(e instanceof Error ? e.message : 'Save failed')
+      return null
+    }
   }
 
   async function saveAs(): Promise<string | null> {
-    const result = await window.api.saveProjectAs(project.value)
-    if (result.canceled) return null
-    projectFilePath.value = result.path
-    return result.path
+    try {
+      const result = await window.api.saveProjectAs(plainProject())
+      if (result.canceled) {
+        flashSaveStatus('Save canceled')
+        return null
+      }
+      projectFilePath.value = result.path
+      flashSaveStatus(`Saved ${result.path.split(/[/\\]/).pop()}`)
+      return result.path
+    } catch (e) {
+      flashSaveStatus(e instanceof Error ? e.message : 'Save As failed')
+      return null
+    }
   }
 
   async function openFromFile(): Promise<boolean> {
-    const result = await window.api.openProject()
-    if (result.canceled) return false
-    projectFilePath.value = result.path
-    await applyLoadedProject(result.project)
-    return true
+    try {
+      const result = await window.api.openProject()
+      if (result.canceled) return false
+      projectFilePath.value = result.path
+      await applyLoadedProject(result.project)
+      flashSaveStatus(`Opened ${result.path.split(/[/\\]/).pop()}`)
+      return true
+    } catch (e) {
+      flashSaveStatus(e instanceof Error ? e.message : 'Open failed')
+      return false
+    }
   }
 
   async function importAssets(): Promise<void> {
@@ -199,7 +255,7 @@ export const useProjectStore = defineStore('project', () => {
       text
     }
     project.value.assets.push(asset)
-    void save()
+    void persist()
     return asset
   }
 
@@ -210,7 +266,7 @@ export const useProjectStore = defineStore('project', () => {
     asset.text = { ...style }
     if (name) asset.name = name
     else asset.name = style.content.split('\n')[0].slice(0, 40) || 'Text'
-    void save()
+    void persist()
   }
 
   function removeAsset(assetId: string): void {
@@ -225,7 +281,7 @@ export const useProjectStore = defineStore('project', () => {
     const nextUrls = { ...mediaUrls.value }
     delete nextUrls[assetId]
     mediaUrls.value = nextUrls
-    void save()
+    void persist()
   }
 
   function addClipFromAsset(assetId: string, trackId: TrackId, startMs: number): Clip | null {
@@ -244,7 +300,7 @@ export const useProjectStore = defineStore('project', () => {
     }
     project.value.clips.push(clip)
     selectedClipId.value = clip.id
-    void save()
+    void persist()
     return clip
   }
 
@@ -257,7 +313,7 @@ export const useProjectStore = defineStore('project', () => {
     if (!clip) return
     pushHistory()
     Object.assign(clip, patch)
-    void save()
+    void persist()
   }
 
   function moveClip(
@@ -272,7 +328,7 @@ export const useProjectStore = defineStore('project', () => {
     if (trackId && asset && !canPlaceOnTrack(asset, trackId)) return
     clip.startMs = Math.max(0, Math.round(startMs))
     if (trackId) clip.trackId = trackId
-    if (opts?.persist !== false && !historySuspended.value) void save()
+    if (opts?.persist !== false && !historySuspended.value) void persist()
   }
 
   function resizeClip(
@@ -302,14 +358,14 @@ export const useProjectStore = defineStore('project', () => {
         clip.offsetMs = Math.max(0, clip.offsetMs + delta)
       }
     }
-    if (opts?.persist !== false && !historySuspended.value) void save()
+    if (opts?.persist !== false && !historySuspended.value) void persist()
   }
 
   function removeClip(id: string): void {
     pushHistory()
     project.value.clips = project.value.clips.filter((c) => c.id !== id)
     if (selectedClipId.value === id) selectedClipId.value = null
-    void save()
+    void persist()
   }
 
   function setTransform(id: string, transform: Partial<Transform>): void {
@@ -317,7 +373,7 @@ export const useProjectStore = defineStore('project', () => {
     if (!clip) return
     pushHistory()
     clip.transform = { ...clip.transform, ...transform }
-    void save()
+    void persist()
   }
 
   function setPropAtPlayhead(
@@ -354,7 +410,7 @@ export const useProjectStore = defineStore('project', () => {
         clip.transform = { ...clip.transform, [prop]: value }
       }
     }
-    if (opts?.persist !== false && !historySuspended.value) void save()
+    if (opts?.persist !== false && !historySuspended.value) void persist()
   }
 
   function setPropsAtPlayhead(
@@ -373,7 +429,7 @@ export const useProjectStore = defineStore('project', () => {
     }
     if (!wasSuspended) {
       resumeHistory()
-      if (opts?.persist !== false) void save()
+      if (opts?.persist !== false) void persist()
     }
   }
 
@@ -401,7 +457,7 @@ export const useProjectStore = defineStore('project', () => {
       isPlaying.value = false
       setPlayhead(clip.startMs + clamped)
     }
-    if (opts?.persist !== false && !historySuspended.value) void save()
+    if (opts?.persist !== false && !historySuspended.value) void persist()
   }
 
   function copyClipSettings(id?: string): void {
@@ -422,7 +478,7 @@ export const useProjectStore = defineStore('project', () => {
       ...k,
       id: uid('kf')
     }))
-    void save()
+    void persist()
   }
 
   function addKeyframe(prop: TransformProp, value?: number): void {
@@ -445,7 +501,7 @@ export const useProjectStore = defineStore('project', () => {
       clip.keyframes.push(kf)
     }
     if (local < 40) clip.transform[prop] = v
-    void save()
+    void persist()
   }
 
   function removeKeyframe(kfId: string): void {
@@ -453,7 +509,7 @@ export const useProjectStore = defineStore('project', () => {
     if (!clip) return
     pushHistory()
     clip.keyframes = clip.keyframes.filter((k) => k.id !== kfId)
-    void save()
+    void persist()
   }
 
   function setPlayhead(ms: number): void {
@@ -475,8 +531,8 @@ export const useProjectStore = defineStore('project', () => {
       exportProgress.value = p
     })
     try {
-      await save()
-      const result = await window.api.exportProject(JSON.parse(JSON.stringify(project.value)))
+      await window.api.saveProject(plainProject())
+      const result = await window.api.exportProject(plainProject())
       if (result.canceled) exportProgress.value = null
     } finally {
       off()
@@ -493,6 +549,7 @@ export const useProjectStore = defineStore('project', () => {
     clipboard,
     mediaUrls,
     projectFilePath,
+    saveStatus,
     exportProgress,
     durationMs,
     clipsByTrack,
