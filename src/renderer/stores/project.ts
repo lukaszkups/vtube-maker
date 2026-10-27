@@ -6,12 +6,14 @@ import type {
   ClipClipboard,
   Keyframe,
   Project,
+  TextStyle,
   TrackId,
   Transform,
   TransformProp
 } from '@shared/types'
 import {
   createEmptyProject,
+  defaultTextStyle,
   defaultTransform,
   isAudioTrack,
   isVideoTrack,
@@ -20,6 +22,11 @@ import {
 import { projectDurationMs } from '@shared/keyframes'
 
 const DEFAULT_STILL_MS = 3000
+const MAX_UNDO = 20
+
+function cloneProject(p: Project): Project {
+  return JSON.parse(JSON.stringify(p)) as Project
+}
 
 export const useProjectStore = defineStore('project', () => {
   const project = ref<Project>(createEmptyProject('Untitled'))
@@ -29,6 +36,9 @@ export const useProjectStore = defineStore('project', () => {
   const pixelsPerSecond = ref(80)
   const clipboard = ref<ClipClipboard | null>(null)
   const mediaUrls = ref<Record<string, string>>({})
+  const projectFilePath = ref('')
+  const history = ref<Project[]>([])
+  const historySuspended = ref(false)
   const exportProgress = ref<{
     phase: string
     currentFrame: number
@@ -41,6 +51,7 @@ export const useProjectStore = defineStore('project', () => {
   )
 
   const durationMs = computed(() => projectDurationMs(project.value.clips))
+  const canUndo = computed(() => history.value.length > 0)
 
   const clipsByTrack = computed(() => {
     const map: Record<TrackId, Clip[]> = {
@@ -64,7 +75,48 @@ export const useProjectStore = defineStore('project', () => {
     return project.value.assets.find((a) => a.id === id)
   }
 
+  function pushHistory(): void {
+    if (historySuspended.value) return
+    history.value.push(cloneProject(project.value))
+    if (history.value.length > MAX_UNDO) {
+      history.value.shift()
+    }
+  }
+
+  function suspendHistory(): void {
+    historySuspended.value = true
+  }
+
+  function resumeHistory(): void {
+    historySuspended.value = false
+  }
+
+  /** Call once at the start of a continuous gesture (drag), then suspendHistory. */
+  function beginGesture(): void {
+    pushHistory()
+    suspendHistory()
+  }
+
+  function endGesture(): void {
+    resumeHistory()
+    void save()
+  }
+
+  function undo(): void {
+    const prev = history.value.pop()
+    if (!prev) return
+    isPlaying.value = false
+    project.value = prev
+    if (selectedClipId.value && !project.value.clips.some((c) => c.id === selectedClipId.value)) {
+      selectedClipId.value = null
+    }
+    mediaUrls.value = {}
+    void ensureMediaUrls()
+    void save()
+  }
+
   async function refreshMediaUrl(asset: Asset): Promise<string> {
+    if (asset.type === 'text' || !asset.path) return ''
     if (mediaUrls.value[asset.id]) return mediaUrls.value[asset.id]
     const url = await window.api.toMediaUrl(asset.path)
     mediaUrls.value = { ...mediaUrls.value, [asset.id]: url }
@@ -73,32 +125,57 @@ export const useProjectStore = defineStore('project', () => {
 
   async function ensureMediaUrls(): Promise<void> {
     for (const a of project.value.assets) {
-      await refreshMediaUrl(a)
+      if (a.type !== 'text' && a.path) await refreshMediaUrl(a)
     }
   }
 
-  async function load(): Promise<void> {
-    project.value = await window.api.loadProject()
+  async function applyLoadedProject(next: Project): Promise<void> {
+    project.value = next
     selectedClipId.value = null
     playheadMs.value = 0
     mediaUrls.value = {}
+    history.value = []
     await ensureMediaUrls()
   }
 
-  async function save(): Promise<void> {
-    await window.api.saveProject(project.value)
+  async function load(): Promise<void> {
+    const loaded = await window.api.loadProject()
+    projectFilePath.value = await window.api.getProjectFile()
+    await applyLoadedProject(loaded)
+  }
+
+  async function save(): Promise<string> {
+    const path = await window.api.saveProject(project.value)
+    projectFilePath.value = path
+    return path
+  }
+
+  async function saveAs(): Promise<string | null> {
+    const result = await window.api.saveProjectAs(project.value)
+    if (result.canceled) return null
+    projectFilePath.value = result.path
+    return result.path
+  }
+
+  async function openFromFile(): Promise<boolean> {
+    const result = await window.api.openProject()
+    if (result.canceled) return false
+    projectFilePath.value = result.path
+    await applyLoadedProject(result.project)
+    return true
   }
 
   async function importAssets(): Promise<void> {
     const assets = await window.api.importAssets()
     if (!assets.length) return
+    pushHistory()
     project.value.assets.push(...assets)
     for (const a of assets) await refreshMediaUrl(a)
     await save()
   }
 
   function defaultClipDuration(asset: Asset): number {
-    if (asset.type === 'gif' || asset.type === 'image') {
+    if (asset.type === 'gif' || asset.type === 'image' || asset.type === 'text') {
       return asset.durationMs || DEFAULT_STILL_MS
     }
     return asset.durationMs || DEFAULT_STILL_MS
@@ -110,9 +187,51 @@ export const useProjectStore = defineStore('project', () => {
     return false
   }
 
+  function addTextAsset(style?: Partial<TextStyle>, name?: string): Asset {
+    pushHistory()
+    const text = { ...defaultTextStyle(), ...style }
+    const asset: Asset = {
+      id: uid('asset'),
+      name: name || (text.content.split('\n')[0].slice(0, 40) || 'Text'),
+      type: 'text',
+      path: '',
+      durationMs: DEFAULT_STILL_MS,
+      text
+    }
+    project.value.assets.push(asset)
+    void save()
+    return asset
+  }
+
+  function updateTextAsset(assetId: string, style: TextStyle, name?: string): void {
+    const asset = getAsset(assetId)
+    if (!asset || asset.type !== 'text') return
+    pushHistory()
+    asset.text = { ...style }
+    if (name) asset.name = name
+    else asset.name = style.content.split('\n')[0].slice(0, 40) || 'Text'
+    void save()
+  }
+
+  function removeAsset(assetId: string): void {
+    const asset = getAsset(assetId)
+    if (!asset) return
+    pushHistory()
+    project.value.assets = project.value.assets.filter((a) => a.id !== assetId)
+    project.value.clips = project.value.clips.filter((c) => c.assetId !== assetId)
+    if (selectedClipId.value && !project.value.clips.some((c) => c.id === selectedClipId.value)) {
+      selectedClipId.value = null
+    }
+    const nextUrls = { ...mediaUrls.value }
+    delete nextUrls[assetId]
+    mediaUrls.value = nextUrls
+    void save()
+  }
+
   function addClipFromAsset(assetId: string, trackId: TrackId, startMs: number): Clip | null {
     const asset = getAsset(assetId)
     if (!asset || !canPlaceOnTrack(asset, trackId)) return null
+    pushHistory()
     const clip: Clip = {
       id: uid('clip'),
       assetId,
@@ -136,32 +255,41 @@ export const useProjectStore = defineStore('project', () => {
   function updateClip(id: string, patch: Partial<Clip>): void {
     const clip = project.value.clips.find((c) => c.id === id)
     if (!clip) return
+    pushHistory()
     Object.assign(clip, patch)
     void save()
   }
 
-  function moveClip(id: string, startMs: number, trackId?: TrackId): void {
+  function moveClip(
+    id: string,
+    startMs: number,
+    trackId?: TrackId,
+    opts?: { persist?: boolean }
+  ): void {
     const clip = project.value.clips.find((c) => c.id === id)
     if (!clip) return
     const asset = getAsset(clip.assetId)
     if (trackId && asset && !canPlaceOnTrack(asset, trackId)) return
     clip.startMs = Math.max(0, Math.round(startMs))
     if (trackId) clip.trackId = trackId
-    void save()
+    if (opts?.persist !== false && !historySuspended.value) void save()
   }
 
-  function resizeClip(id: string, edge: 'start' | 'end', timeMs: number): void {
+  function resizeClip(
+    id: string,
+    edge: 'start' | 'end',
+    timeMs: number,
+    opts?: { persist?: boolean }
+  ): void {
     const clip = project.value.clips.find((c) => c.id === id)
     if (!clip) return
     const asset = getAsset(clip.assetId)
     if (edge === 'end') {
       const newDur = Math.max(100, Math.round(timeMs - clip.startMs))
-      // For video/audio with finite source, cap by remaining media
       if (asset && (asset.type === 'video' || asset.type === 'audio') && asset.durationMs) {
         const maxDur = asset.durationMs - clip.offsetMs
         clip.durationMs = Math.min(newDur, maxDur)
       } else {
-        // GIF / image: extend = more loops
         clip.durationMs = newDur
       }
     } else {
@@ -174,10 +302,11 @@ export const useProjectStore = defineStore('project', () => {
         clip.offsetMs = Math.max(0, clip.offsetMs + delta)
       }
     }
-    void save()
+    if (opts?.persist !== false && !historySuspended.value) void save()
   }
 
   function removeClip(id: string): void {
+    pushHistory()
     project.value.clips = project.value.clips.filter((c) => c.id !== id)
     if (selectedClipId.value === id) selectedClipId.value = null
     void save()
@@ -186,8 +315,93 @@ export const useProjectStore = defineStore('project', () => {
   function setTransform(id: string, transform: Partial<Transform>): void {
     const clip = project.value.clips.find((c) => c.id === id)
     if (!clip) return
+    pushHistory()
     clip.transform = { ...clip.transform, ...transform }
     void save()
+  }
+
+  function setPropAtPlayhead(
+    id: string,
+    prop: TransformProp,
+    value: number,
+    opts?: { persist?: boolean }
+  ): void {
+    const clip = project.value.clips.find((c) => c.id === id)
+    if (!clip) return
+    if (!historySuspended.value) pushHistory()
+    const local = Math.max(0, Math.round(playheadMs.value - clip.startMs))
+    const hasKeys = clip.keyframes.some((k) => k.prop === prop)
+
+    if (!hasKeys) {
+      clip.transform = { ...clip.transform, [prop]: value }
+    } else {
+      const existing = clip.keyframes.find(
+        (k) => k.prop === prop && Math.abs(k.timeMs - local) < 40
+      )
+      if (existing) {
+        existing.value = value
+        existing.timeMs = local
+      } else {
+        clip.keyframes.push({
+          id: uid('kf'),
+          timeMs: local,
+          prop,
+          value,
+          easing: 'easeInOut'
+        })
+      }
+      if (local < 40) {
+        clip.transform = { ...clip.transform, [prop]: value }
+      }
+    }
+    if (opts?.persist !== false && !historySuspended.value) void save()
+  }
+
+  function setPropsAtPlayhead(
+    id: string,
+    patch: Partial<Transform>,
+    opts?: { persist?: boolean }
+  ): void {
+    const wasSuspended = historySuspended.value
+    if (!wasSuspended) {
+      pushHistory()
+      suspendHistory()
+    }
+    for (const key of Object.keys(patch) as TransformProp[]) {
+      const v = patch[key]
+      if (typeof v === 'number') setPropAtPlayhead(id, key, v, { persist: false })
+    }
+    if (!wasSuspended) {
+      resumeHistory()
+      if (opts?.persist !== false) void save()
+    }
+  }
+
+  function seekToKeyframe(kfId: string): void {
+    const clip = selectedClip.value
+    if (!clip) return
+    const kf = clip.keyframes.find((k) => k.id === kfId)
+    if (!kf) return
+    isPlaying.value = false
+    setPlayhead(clip.startMs + kf.timeMs)
+  }
+
+  function moveKeyframeTime(
+    kfId: string,
+    timeMs: number,
+    opts?: { seek?: boolean; persist?: boolean }
+  ): void {
+    const clip = selectedClip.value
+    if (!clip) return
+    const kf = clip.keyframes.find((k) => k.id === kfId)
+    if (!kf) return
+    const clamped = Math.max(0, Math.min(Math.round(timeMs), Math.max(0, clip.durationMs)))
+    kf.timeMs = clamped
+    if (opts?.seek !== false) {
+      isPlaying.value = false
+      setPlayhead(clip.startMs + clamped)
+    }
+    if (opts?.persist !== false && !historySuspended.value) void save()
   }
 
   function copyClipSettings(id?: string): void {
@@ -202,6 +416,7 @@ export const useProjectStore = defineStore('project', () => {
   function pasteClipSettings(id?: string): void {
     const clip = project.value.clips.find((c) => c.id === (id || selectedClipId.value))
     if (!clip || !clipboard.value) return
+    pushHistory()
     clip.transform = { ...clipboard.value.transform }
     clip.keyframes = clipboard.value.keyframes.map((k) => ({
       ...k,
@@ -213,6 +428,7 @@ export const useProjectStore = defineStore('project', () => {
   function addKeyframe(prop: TransformProp, value?: number): void {
     const clip = selectedClip.value
     if (!clip) return
+    pushHistory()
     const local = Math.max(0, playheadMs.value - clip.startMs)
     const existing = clip.keyframes.find((k) => k.prop === prop && Math.abs(k.timeMs - local) < 40)
     const v = value ?? clip.transform[prop]
@@ -228,7 +444,6 @@ export const useProjectStore = defineStore('project', () => {
       }
       clip.keyframes.push(kf)
     }
-    // also update base if at start
     if (local < 40) clip.transform[prop] = v
     void save()
   }
@@ -236,6 +451,7 @@ export const useProjectStore = defineStore('project', () => {
   function removeKeyframe(kfId: string): void {
     const clip = selectedClip.value
     if (!clip) return
+    pushHistory()
     clip.keyframes = clip.keyframes.filter((k) => k.id !== kfId)
     void save()
   }
@@ -246,10 +462,9 @@ export const useProjectStore = defineStore('project', () => {
 
   async function addRecordingAsset(buffer: ArrayBuffer, name?: string): Promise<Asset> {
     const asset = await window.api.saveRecording(buffer, name)
+    pushHistory()
     project.value.assets.push(asset)
     await refreshMediaUrl(asset)
-    const track: TrackId = 'A1'
-    addClipFromAsset(asset.id, track, playheadMs.value)
     await save()
     return asset
   }
@@ -277,14 +492,25 @@ export const useProjectStore = defineStore('project', () => {
     pixelsPerSecond,
     clipboard,
     mediaUrls,
+    projectFilePath,
     exportProgress,
     durationMs,
     clipsByTrack,
+    canUndo,
     getAsset,
     refreshMediaUrl,
+    pushHistory,
+    beginGesture,
+    endGesture,
+    undo,
     load,
     save,
+    saveAs,
+    openFromFile,
     importAssets,
+    addTextAsset,
+    updateTextAsset,
+    removeAsset,
     addClipFromAsset,
     selectClip,
     updateClip,
@@ -292,6 +518,10 @@ export const useProjectStore = defineStore('project', () => {
     resizeClip,
     removeClip,
     setTransform,
+    setPropAtPlayhead,
+    setPropsAtPlayhead,
+    seekToKeyframe,
+    moveKeyframeTime,
     copyClipSettings,
     pasteClipSettings,
     addKeyframe,

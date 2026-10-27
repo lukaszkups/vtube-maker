@@ -3,6 +3,7 @@ import { storeToRefs } from 'pinia'
 import { useProjectStore } from '../stores/project'
 import { evaluateTransform } from '@shared/keyframes'
 import type { Asset, Clip, TrackId } from '@shared/types'
+import { drawTextCentered } from '@shared/textRender'
 import { drawGifFrame } from './useGifDecoder'
 
 const VIDEO_ORDER: TrackId[] = ['V1', 'V2', 'V3']
@@ -78,18 +79,28 @@ export function usePreviewEngine(canvasRef: Ref<HTMLCanvasElement | null>) {
     if (!asset || asset.type === 'audio') return
     const transform = evaluateTransform(clip, t)
     const local = t - clip.startMs + clip.offsetMs
-    const url = getMediaUrl(asset)
-    if (!url) return
-
-    let sw = asset.width || 100
-    let sh = asset.height || 100
-    const dw = sw * transform.scaleX
-    const dh = sh * transform.scaleY
 
     ctx.save()
     ctx.globalAlpha = Math.max(0, Math.min(1, transform.opacity))
     ctx.translate(transform.x, transform.y)
     ctx.rotate((transform.rotation * Math.PI) / 180)
+
+    if (asset.type === 'text' && asset.text) {
+      drawTextCentered(ctx, asset.text, transform.scaleX, transform.scaleY)
+      ctx.restore()
+      return
+    }
+
+    const url = getMediaUrl(asset)
+    if (!url) {
+      ctx.restore()
+      return
+    }
+
+    let sw = asset.width || 100
+    let sh = asset.height || 100
+    const dw = sw * transform.scaleX
+    const dh = sh * transform.scaleY
 
     if (asset.type === 'gif') {
       await drawGifFrame(ctx, url, local, -dw / 2, -dh / 2, dw, dh)
@@ -100,7 +111,7 @@ export function usePreviewEngine(canvasRef: Ref<HTMLCanvasElement | null>) {
         sh = img.naturalHeight || sh
         ctx.drawImage(img, -dw / 2, -dh / 2, dw, dh)
       }
-    } else {
+    } else if (asset.type === 'video') {
       const video = ensureVideo(asset)
       if (video) {
         const target = local / 1000

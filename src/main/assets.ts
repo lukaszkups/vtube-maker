@@ -1,12 +1,34 @@
 import { dialog, BrowserWindow } from 'electron'
-import { copyFile, mkdir, writeFile, readFile } from 'fs/promises'
+import { copyFile, mkdir, writeFile, readFile, unlink } from 'fs/promises'
 import { basename, extname, join } from 'path'
 import { existsSync } from 'fs'
 import { spawn } from 'child_process'
 import ffprobePath from 'ffprobe-static'
+import ffmpegPath from 'ffmpeg-static'
 import sharp from 'sharp'
 import type { Asset, AssetType } from '../shared/types'
 import { uid } from '../shared/types'
+
+function ffmpegBin(): string {
+  const p = ffmpegPath as unknown as string | null
+  if (!p) throw new Error('ffmpeg-static binary missing')
+  return p
+}
+
+function runFfmpeg(args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(ffmpegBin(), args)
+    let err = ''
+    proc.stderr.on('data', (d) => {
+      err += d.toString()
+    })
+    proc.on('close', (code) => {
+      if (code === 0) resolve()
+      else reject(new Error(err.slice(-400) || `ffmpeg exit ${code}`))
+    })
+    proc.on('error', reject)
+  })
+}
 
 function probeBinary(): string {
   const p = ffprobePath as unknown as string | { path: string }
@@ -165,14 +187,34 @@ export async function saveRecording(
 ): Promise<Asset> {
   await ensureProjectDirs(projectDir)
   const id = uid('asset')
-  const destName = `${id}.webm`
-  const dest = join(projectDir, 'assets', destName)
-  await writeFile(dest, Buffer.from(buffer))
+  const tmpWebm = join(projectDir, 'assets', `${id}.webm`)
+  const dest = join(projectDir, 'assets', `${id}.mp3`)
+  await writeFile(tmpWebm, Buffer.from(buffer))
+  try {
+    await runFfmpeg([
+      '-y',
+      '-i',
+      tmpWebm,
+      '-vn',
+      '-acodec',
+      'libmp3lame',
+      '-q:a',
+      '2',
+      dest
+    ])
+  } finally {
+    try {
+      if (existsSync(tmpWebm)) await unlink(tmpWebm)
+    } catch {
+      /* ignore */
+    }
+  }
   const meta = await probeMedia(dest)
+  const stamp = new Date().toLocaleTimeString()
   return {
     id,
-    name: suggestedName || `Recording ${new Date().toLocaleTimeString()}`,
-    type: 'audio', // recordings are always audio tracks
+    name: suggestedName || `Recording ${stamp}.mp3`,
+    type: 'audio',
     path: dest,
     durationMs: meta.durationMs || 1000
   }
@@ -192,6 +234,26 @@ export async function pickProjectDir(): Promise<string | null> {
   const win = BrowserWindow.getFocusedWindow()
   const result = await dialog.showOpenDialog(win!, {
     properties: ['openDirectory', 'createDirectory']
+  })
+  if (result.canceled || result.filePaths.length === 0) return null
+  return result.filePaths[0]
+}
+
+export async function pickSaveProjectPath(defaultName = 'project.json'): Promise<string | null> {
+  const win = BrowserWindow.getFocusedWindow()
+  const result = await dialog.showSaveDialog(win!, {
+    defaultPath: defaultName,
+    filters: [{ name: 'VTube Maker Project', extensions: ['json'] }]
+  })
+  if (result.canceled || !result.filePath) return null
+  return result.filePath.endsWith('.json') ? result.filePath : `${result.filePath}.json`
+}
+
+export async function pickOpenProjectPath(): Promise<string | null> {
+  const win = BrowserWindow.getFocusedWindow()
+  const result = await dialog.showOpenDialog(win!, {
+    properties: ['openFile'],
+    filters: [{ name: 'VTube Maker Project', extensions: ['json'] }]
   })
   if (result.canceled || result.filePaths.length === 0) return null
   return result.filePaths[0]

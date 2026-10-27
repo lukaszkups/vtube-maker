@@ -2,10 +2,39 @@ export const CANVAS_WIDTH = 1920
 export const CANVAS_HEIGHT = 1080
 export const DEFAULT_FPS = 30
 
-export type AssetType = 'image' | 'video' | 'audio' | 'gif'
+export type AssetType = 'image' | 'video' | 'audio' | 'gif' | 'text'
 export type TrackId = 'V1' | 'V2' | 'V3' | 'A1' | 'A2' | 'A3'
 export type TransformProp = 'x' | 'y' | 'scaleX' | 'scaleY' | 'rotation' | 'opacity'
 export type Easing = 'linear' | 'easeInOut'
+export type TextAlign = 'left' | 'center' | 'right'
+
+export interface TextStyle {
+  content: string
+  fontFamily: string
+  fontSize: number
+  fontWeight: string
+  fontStyle: 'normal' | 'italic'
+  color: string
+  align: TextAlign
+  strokeColor: string
+  strokeWidth: number
+  lineHeight: number
+}
+
+export function defaultTextStyle(content = 'Label'): TextStyle {
+  return {
+    content,
+    fontFamily: 'sans-serif',
+    fontSize: 72,
+    fontWeight: '700',
+    fontStyle: 'normal',
+    color: '#ffffff',
+    align: 'center',
+    strokeColor: '#000000',
+    strokeWidth: 0,
+    lineHeight: 1.2
+  }
+}
 
 export const VIDEO_TRACKS: TrackId[] = ['V1', 'V2', 'V3']
 export const AUDIO_TRACKS: TrackId[] = ['A1', 'A2', 'A3']
@@ -32,10 +61,13 @@ export interface Asset {
   id: string
   name: string
   type: AssetType
+  /** Empty for text assets */
   path: string
   durationMs?: number
   width?: number
   height?: number
+  /** Present when type === 'text' */
+  text?: TextStyle
 }
 
 export interface Clip {

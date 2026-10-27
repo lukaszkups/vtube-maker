@@ -53,6 +53,7 @@ function onPointerDown(e: PointerEvent): void {
   dragMode.value = nearHandle ? 'scale' : 'move'
   dragging.value = true
   last.value = p
+  store.beginGesture()
   ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
 }
 
@@ -65,18 +66,24 @@ function onPointerMove(e: PointerEvent): void {
   last.value = p
   const clip = store.selectedClip
   const t = evaluateTransform(clip, store.playheadMs)
+  const opts = { persist: false }
   if (dragMode.value === 'move') {
-    store.setTransform(clip.id, { x: t.x + dx, y: t.y + dy })
+    store.setPropsAtPlayhead(clip.id, { x: t.x + dx, y: t.y + dy }, opts)
   } else if (dragMode.value === 'scale') {
     const factor = 1 + dx / 400
-    store.setTransform(clip.id, {
-      scaleX: Math.max(0.05, t.scaleX * factor),
-      scaleY: Math.max(0.05, t.scaleY * factor)
-    })
+    store.setPropsAtPlayhead(
+      clip.id,
+      {
+        scaleX: Math.max(0.05, t.scaleX * factor),
+        scaleY: Math.max(0.05, t.scaleY * factor)
+      },
+      opts
+    )
   }
 }
 
 function onPointerUp(): void {
+  if (dragging.value) store.endGesture()
   dragging.value = false
   dragMode.value = null
 }

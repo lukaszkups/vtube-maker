@@ -12,25 +12,48 @@ const store = useProjectStore()
 
 function onKey(e: KeyboardEvent): void {
   const meta = e.metaKey || e.ctrlKey
-  if (meta && e.key.toLowerCase() === 'c') {
-    store.copyClipSettings()
+  const tag = (e.target as HTMLElement)?.tagName
+  const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+
+  if (meta && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+    if (!typing) {
+      store.undo()
+      e.preventDefault()
+    }
+    return
+  }
+  if (meta && e.key.toLowerCase() === 's') {
+    if (e.shiftKey) void store.saveAs()
+    else void store.save()
     e.preventDefault()
+    return
+  }
+  if (meta && e.key.toLowerCase() === 'o') {
+    void store.openFromFile()
+    e.preventDefault()
+    return
+  }
+  if (meta && e.key.toLowerCase() === 'c') {
+    if (!typing) {
+      store.copyClipSettings()
+      e.preventDefault()
+    }
   }
   if (meta && e.key.toLowerCase() === 'v') {
-    store.pasteClipSettings()
-    e.preventDefault()
+    if (!typing) {
+      store.pasteClipSettings()
+      e.preventDefault()
+    }
   }
   if (e.key === 'Delete' || e.key === 'Backspace') {
-    const tag = (e.target as HTMLElement)?.tagName
-    if (tag === 'INPUT' || tag === 'TEXTAREA') return
+    if (typing) return
     if (store.selectedClipId) {
       store.removeClip(store.selectedClipId)
       e.preventDefault()
     }
   }
   if (e.key === ' ') {
-    const tag = (e.target as HTMLElement)?.tagName
-    if (tag === 'INPUT' || tag === 'TEXTAREA') return
+    if (typing) return
     store.isPlaying = !store.isPlaying
     e.preventDefault()
   }

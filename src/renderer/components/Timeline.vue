@@ -31,6 +31,7 @@ function clipStyle(startMs: number, durationMs: number): Record<string, string> 
 function clipClass(assetType: string | undefined): string {
   if (assetType === 'gif') return 'clip gif'
   if (assetType === 'audio') return 'clip audio'
+  if (assetType === 'text') return 'clip text'
   return 'clip video'
 }
 
@@ -73,6 +74,7 @@ function startClipDrag(e: PointerEvent, clipId: string, kind: DragKind): void {
   const clip = store.project.clips.find((c) => c.id === clipId)
   if (!clip) return
   store.selectClip(clipId)
+  store.beginGesture()
   drag.value = {
     kind,
     clipId,
@@ -87,17 +89,19 @@ function onClipPointerMove(e: PointerEvent): void {
   if (!drag.value) return
   const dx = e.clientX - drag.value.originX
   const dMs = xToMs(dx)
+  const opts = { persist: false }
   if (drag.value.kind === 'move') {
-    store.moveClip(drag.value.clipId, drag.value.originStart + dMs)
+    store.moveClip(drag.value.clipId, drag.value.originStart + dMs, undefined, opts)
   } else if (drag.value.kind === 'resize-end') {
     const end = drag.value.originStart + drag.value.originDuration + dMs
-    store.resizeClip(drag.value.clipId, 'end', end)
+    store.resizeClip(drag.value.clipId, 'end', end, opts)
   } else {
-    store.resizeClip(drag.value.clipId, 'start', drag.value.originStart + dMs)
+    store.resizeClip(drag.value.clipId, 'start', drag.value.originStart + dMs, opts)
   }
 }
 
 function endClipDrag(): void {
+  if (drag.value) store.endGesture()
   drag.value = null
 }
 
@@ -287,6 +291,10 @@ function zoom(delta: number): void {
 
 .clip.gif {
   background: var(--clip-gif);
+}
+
+.clip.text {
+  background: #8a5a2b;
 }
 
 .clip.selected {

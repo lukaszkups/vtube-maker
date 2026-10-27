@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useProjectStore } from '../stores/project'
-import { useAudioRecorder } from '../composables/useAudioRecorder'
 
 const store = useProjectStore()
-const recorder = useAudioRecorder()
 
 const timeLabel = computed(() => formatTime(store.playheadMs))
 const durLabel = computed(() => formatTime(store.durationMs))
+const fileLabel = computed(() => {
+  const p = store.projectFilePath
+  if (!p) return 'Unsaved'
+  const parts = p.split(/[/\\]/)
+  return parts[parts.length - 1] || p
+})
 
 function formatTime(ms: number): string {
   const s = Math.floor(ms / 1000)
@@ -26,7 +30,9 @@ function togglePlay(): void {
   <header class="toolbar">
     <div class="brand">
       <span class="logo">VTube Maker</span>
-      <span class="res">1920×1080 · {{ store.project.fps }}fps</span>
+      <span class="res" :title="store.projectFilePath || ''">
+        1920×1080 · {{ store.project.fps }}fps · {{ fileLabel }}
+      </span>
     </div>
     <div class="transport">
       <button type="button" @click="store.setPlayhead(0)" title="Go to start">Start</button>
@@ -36,17 +42,14 @@ function togglePlay(): void {
       <span class="time">{{ timeLabel }} / {{ durLabel }}</span>
     </div>
     <div class="actions">
-      <button
-        type="button"
-        :class="{ danger: recorder.isRecording }"
-        @click="recorder.toggle()"
-      >
-        {{ recorder.isRecording ? 'Stop Rec' : 'Record Audio' }}
+      <button type="button" :disabled="!store.canUndo" title="Undo (Ctrl/Cmd+Z)" @click="store.undo()">
+        Undo
       </button>
+      <button type="button" @click="store.openFromFile()">Open</button>
       <button type="button" @click="store.save()">Save</button>
+      <button type="button" @click="store.saveAs()">Save As</button>
       <button type="button" class="primary" @click="store.runExport()">Export</button>
     </div>
-    <p v-if="recorder.error" class="err">{{ recorder.error }}</p>
   </header>
 </template>
 
@@ -64,6 +67,7 @@ function togglePlay(): void {
   display: flex;
   flex-direction: column;
   min-width: 160px;
+  max-width: 260px;
 }
 
 .logo {
@@ -76,6 +80,9 @@ function togglePlay(): void {
   color: var(--muted);
   font-size: 11px;
   font-family: var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .transport,
@@ -94,14 +101,5 @@ function togglePlay(): void {
   font-family: var(--mono);
   color: var(--muted);
   margin-left: 8px;
-}
-
-.err {
-  position: absolute;
-  right: 14px;
-  bottom: -2px;
-  margin: 0;
-  color: var(--danger);
-  font-size: 11px;
 }
 </style>

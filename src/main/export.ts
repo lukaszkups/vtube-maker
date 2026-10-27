@@ -8,6 +8,7 @@ import sharp from 'sharp'
 import type { BrowserWindow } from 'electron'
 import type { Asset, Clip, ExportProgress, Project, TrackId } from '../shared/types'
 import { evaluateTransform, projectDurationMs } from '../shared/keyframes'
+import { measureTextBlock, textStyleToSvg } from '../shared/textRender'
 
 function ffmpegBin(): string {
   const p = ffmpegPath as unknown as string | null
@@ -55,84 +56,103 @@ async function renderFrame(
     const transform = evaluateTransform(clip, tMs)
     const localMs = tMs - clip.startMs + clip.offsetMs
 
-    let srcBuf: Buffer
+    let layerBuf: Buffer
+    let lw: number
+    let lh: number
     try {
-      if (asset.type === 'image') {
-        if (!imageCache.has(asset.id)) {
-          imageCache.set(asset.id, await sharp(asset.path).ensureAlpha().png().toBuffer())
+      if (asset.type === 'text' && asset.text) {
+        const scaled = {
+          ...asset.text,
+          fontSize: asset.text.fontSize * ((Math.abs(transform.scaleX) + Math.abs(transform.scaleY)) / 2)
         }
-        srcBuf = imageCache.get(asset.id)!
-      } else if (asset.type === 'gif') {
-        // Extract a single frame via sharp (pages) - loop by page index
-        const meta = await sharp(asset.path, { animated: true }).metadata()
-        const pages = meta.pages || 1
-        const delays = meta.delay || []
-        const totalDelay =
-          delays.length > 0 ? delays.reduce((a: number, b: number) => a + b, 0) : pages * 100
-        const loopMs = totalDelay || 1000
-        let cursor = ((localMs % loopMs) + loopMs) % loopMs
-        let page = 0
-        if (delays.length === pages) {
-          let acc = 0
-          for (let i = 0; i < pages; i++) {
-            acc += delays[i] || 100
-            if (cursor < acc) {
-              page = i
-              break
-            }
-            page = i
-          }
-        } else {
-          page = Math.floor((cursor / loopMs) * pages) % pages
-        }
-        srcBuf = await sharp(asset.path, { page, animated: false }).ensureAlpha().png().toBuffer()
+        const measured = measureTextBlock(scaled)
+        const svg = textStyleToSvg(scaled, measured.width, measured.height)
+        layerBuf = await sharp(Buffer.from(svg)).ensureAlpha().png().toBuffer()
+        const meta = await sharp(layerBuf).metadata()
+        lw = meta.width || measured.width
+        lh = meta.height || measured.height
       } else {
-        // video: extract one frame with ffmpeg to temp png (stream per call - acceptable for v1)
-        srcBuf = await extractVideoFrame(asset.path, (localMs % (asset.durationMs || localMs + 1)) / 1000)
+        let srcBuf: Buffer
+        if (asset.type === 'image') {
+          if (!imageCache.has(asset.id)) {
+            imageCache.set(asset.id, await sharp(asset.path).ensureAlpha().png().toBuffer())
+          }
+          srcBuf = imageCache.get(asset.id)!
+        } else if (asset.type === 'gif') {
+          const meta = await sharp(asset.path, { animated: true }).metadata()
+          const pages = meta.pages || 1
+          const delays = meta.delay || []
+          const totalDelay =
+            delays.length > 0 ? delays.reduce((a: number, b: number) => a + b, 0) : pages * 100
+          const loopMs = totalDelay || 1000
+          const cursor = ((localMs % loopMs) + loopMs) % loopMs
+          let page = 0
+          if (delays.length === pages) {
+            let acc = 0
+            for (let i = 0; i < pages; i++) {
+              acc += delays[i] || 100
+              if (cursor < acc) {
+                page = i
+                break
+              }
+              page = i
+            }
+          } else {
+            page = Math.floor((cursor / loopMs) * pages) % pages
+          }
+          srcBuf = await sharp(asset.path, { page, animated: false }).ensureAlpha().png().toBuffer()
+        } else {
+          srcBuf = await extractVideoFrame(
+            asset.path,
+            (localMs % (asset.durationMs || localMs + 1)) / 1000
+          )
+        }
+
+        const meta = await sharp(srcBuf).metadata()
+        const sw = meta.width || 1
+        const sh = meta.height || 1
+        const dw = Math.max(1, Math.round(sw * transform.scaleX))
+        const dh = Math.max(1, Math.round(sh * transform.scaleY))
+        layerBuf = await sharp(srcBuf).resize(dw, dh, { fit: 'fill' }).ensureAlpha().png().toBuffer()
+        const layerMeta = await sharp(layerBuf).metadata()
+        lw = layerMeta.width || dw
+        lh = layerMeta.height || dh
       }
+
+      if (transform.opacity < 1) {
+        const { data, info } = await sharp(layerBuf).ensureAlpha().raw().toBuffer({ resolveWithObject: true })
+        for (let i = 3; i < data.length; i += 4) {
+          data[i] = Math.round(data[i] * transform.opacity)
+        }
+        layerBuf = await sharp(data, {
+          raw: { width: info.width, height: info.height, channels: 4 }
+        })
+          .png()
+          .toBuffer()
+      }
+
+      if (transform.rotation !== 0) {
+        layerBuf = await sharp(layerBuf)
+          .rotate(transform.rotation, {
+            background: { r: 0, g: 0, b: 0, alpha: 0 }
+          })
+          .png()
+          .toBuffer()
+        const rotated = await sharp(layerBuf).metadata()
+        lw = rotated.width || lw
+        lh = rotated.height || lh
+      }
+
+      const left = Math.round(transform.x - lw / 2)
+      const top = Math.round(transform.y - lh / 2)
+      composites.push({
+        input: layerBuf,
+        left: Math.min(Math.max(left, -lw), width),
+        top: Math.min(Math.max(top, -lh), height)
+      })
     } catch {
       continue
     }
-
-    const meta = await sharp(srcBuf).metadata()
-    const sw = meta.width || 1
-    const sh = meta.height || 1
-    const dw = Math.max(1, Math.round(sw * transform.scaleX))
-    const dh = Math.max(1, Math.round(sh * transform.scaleY))
-
-    let layerBuf = await sharp(srcBuf).resize(dw, dh, { fit: 'fill' }).ensureAlpha().png().toBuffer()
-
-    if (transform.opacity < 1) {
-      const { data, info } = await sharp(layerBuf).ensureAlpha().raw().toBuffer({ resolveWithObject: true })
-      for (let i = 3; i < data.length; i += 4) {
-        data[i] = Math.round(data[i] * transform.opacity)
-      }
-      layerBuf = await sharp(data, {
-        raw: { width: info.width, height: info.height, channels: 4 }
-      })
-        .png()
-        .toBuffer()
-    }
-
-    if (transform.rotation !== 0) {
-      layerBuf = await sharp(layerBuf)
-        .rotate(transform.rotation, {
-          background: { r: 0, g: 0, b: 0, alpha: 0 }
-        })
-        .png()
-        .toBuffer()
-    }
-    const layerMeta = await sharp(layerBuf).metadata()
-    const lw = layerMeta.width || dw
-    const lh = layerMeta.height || dh
-    const left = Math.round(transform.x - lw / 2)
-    const top = Math.round(transform.y - lh / 2)
-
-    composites.push({
-      input: layerBuf,
-      left: Math.min(Math.max(left, -lw), width),
-      top: Math.min(Math.max(top, -lh), height)
-    })
   }
 
   if (composites.length > 0) {

@@ -7,12 +7,16 @@ import {
   ensureProjectDirs,
   importFiles,
   pickExportPath,
+  pickOpenProjectPath,
   pickProjectDir,
+  pickSaveProjectPath,
   saveRecording
 } from './assets'
 import { exportProject } from './export'
+import { listSystemFonts } from './fonts'
 import type { Project } from '../shared/types'
 import { createEmptyProject } from '../shared/types'
+import { dirname } from 'path'
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -37,9 +41,14 @@ app.commandLine.appendSwitch('disable-software-rasterizer')
 
 let mainWindow: BrowserWindow | null = null
 let projectDir: string = ''
+let projectFilePath: string = ''
 
 function defaultProjectDir(): string {
   return join(app.getPath('userData'), 'projects', 'default')
+}
+
+function defaultProjectFile(): string {
+  return join(defaultProjectDir(), 'project.json')
 }
 
 async function createWindow(): Promise<void> {
@@ -74,9 +83,11 @@ app.whenReady().then(async () => {
   })
 
   projectDir = defaultProjectDir()
+  projectFilePath = defaultProjectFile()
   await ensureProjectDirs(projectDir)
 
   ipcMain.handle('project:getDir', () => projectDir)
+  ipcMain.handle('project:getFile', () => projectFilePath)
 
   ipcMain.handle('project:setDir', async (_e, dir?: string) => {
     if (dir) {
@@ -87,18 +98,41 @@ app.whenReady().then(async () => {
       projectDir = picked
     }
     await ensureProjectDirs(projectDir)
+    projectFilePath = join(projectDir, 'project.json')
     return projectDir
   })
 
   ipcMain.handle('project:save', async (_e, project: Project) => {
     await ensureProjectDirs(projectDir)
-    const path = join(projectDir, 'project.json')
+    const path = projectFilePath || join(projectDir, 'project.json')
     await writeFile(path, JSON.stringify(project, null, 2), 'utf-8')
+    projectFilePath = path
     return path
   })
 
+  ipcMain.handle('project:saveAs', async (_e, project: Project) => {
+    const picked = await pickSaveProjectPath(`${project.name || 'project'}.json`)
+    if (!picked) return { canceled: true as const }
+    await writeFile(picked, JSON.stringify(project, null, 2), 'utf-8')
+    projectFilePath = picked
+    projectDir = dirname(picked)
+    await ensureProjectDirs(projectDir)
+    return { canceled: false as const, path: picked }
+  })
+
+  ipcMain.handle('project:open', async () => {
+    const picked = await pickOpenProjectPath()
+    if (!picked) return { canceled: true as const }
+    const raw = await readFile(picked, 'utf-8')
+    const project = JSON.parse(raw) as Project
+    projectFilePath = picked
+    projectDir = dirname(picked)
+    await ensureProjectDirs(projectDir)
+    return { canceled: false as const, path: picked, project }
+  })
+
   ipcMain.handle('project:load', async () => {
-    const path = join(projectDir, 'project.json')
+    const path = projectFilePath || join(projectDir, 'project.json')
     if (!existsSync(path)) return createEmptyProject()
     const raw = await readFile(path, 'utf-8')
     return JSON.parse(raw) as Project
@@ -111,6 +145,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('assets:saveRecording', async (_e, buffer: ArrayBuffer, name?: string) => {
     return saveRecording(projectDir, buffer, name)
   })
+
+  ipcMain.handle('fonts:list', async () => listSystemFonts())
 
   ipcMain.handle('export:run', async (_e, project: Project) => {
     const out = await pickExportPath(`${project.name || 'export'}.mp4`)
