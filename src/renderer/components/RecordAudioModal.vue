@@ -11,8 +11,8 @@ const emit = defineEmits<{
 const { isRecording, error, start, stop, saveBuffer } = useAudioRecorder()
 const elapsedMs = ref(0)
 const saving = ref(false)
+const pendingBuffer = ref<ArrayBuffer | null>(null)
 let tickTimer: ReturnType<typeof setInterval> | null = null
-let pendingBuffer: ArrayBuffer | null = null
 
 const elapsedLabel = computed(() => {
   const s = Math.floor(elapsedMs.value / 1000)
@@ -21,7 +21,7 @@ const elapsedLabel = computed(() => {
   return `${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}`
 })
 
-const hasTake = computed(() => !!pendingBuffer)
+const hasTake = computed(() => !!pendingBuffer.value)
 
 watch(
   () => props.open,
@@ -30,7 +30,7 @@ watch(
       void discardSession()
     } else {
       elapsedMs.value = 0
-      pendingBuffer = null
+      pendingBuffer.value = null
       error.value = null
     }
   }
@@ -52,12 +52,12 @@ function stopTick(): void {
 }
 
 async function onStart(): Promise<void> {
-  pendingBuffer = null
+  pendingBuffer.value = null
   elapsedMs.value = 0
   await start({
     autoSave: false,
     onStop: (buffer) => {
-      pendingBuffer = buffer
+      pendingBuffer.value = buffer
       stopTick()
     }
   })
@@ -70,11 +70,11 @@ function onStop(): void {
 }
 
 async function onSave(): Promise<void> {
-  if (!pendingBuffer) return
+  if (!pendingBuffer.value) return
   saving.value = true
   try {
-    await saveBuffer(pendingBuffer)
-    pendingBuffer = null
+    await saveBuffer(pendingBuffer.value)
+    pendingBuffer.value = null
     emit('saved')
     emit('close')
   } finally {
@@ -85,7 +85,7 @@ async function onSave(): Promise<void> {
 async function discardSession(): Promise<void> {
   stopTick()
   if (isRecording.value) stop({ discard: true })
-  pendingBuffer = null
+  pendingBuffer.value = null
   elapsedMs.value = 0
 }
 
