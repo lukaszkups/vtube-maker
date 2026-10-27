@@ -1,0 +1,198 @@
+import { dialog, BrowserWindow } from 'electron'
+import { copyFile, mkdir, writeFile, readFile } from 'fs/promises'
+import { basename, extname, join } from 'path'
+import { existsSync } from 'fs'
+import { spawn } from 'child_process'
+import ffprobePath from 'ffprobe-static'
+import sharp from 'sharp'
+import type { Asset, AssetType } from '../shared/types'
+import { uid } from '../shared/types'
+
+function probeBinary(): string {
+  const p = ffprobePath as unknown as string | { path: string }
+  return typeof p === 'string' ? p : p.path
+}
+
+export function ensureProjectDirs(projectDir: string): Promise<void> {
+  return mkdir(join(projectDir, 'assets'), { recursive: true }).then(() => undefined)
+}
+
+function detectType(filePath: string): AssetType {
+  const ext = extname(filePath).toLowerCase()
+  if (ext === '.gif') return 'gif'
+  if (['.png', '.jpg', '.jpeg', '.webp', '.bmp'].includes(ext)) return 'image'
+  if (['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac'].includes(ext)) return 'audio'
+  if (['.mp4', '.mov', '.mkv', '.avi', '.webm'].includes(ext)) return 'video'
+  return 'video'
+}
+
+function probeMedia(filePath: string): Promise<{ durationMs?: number; width?: number; height?: number }> {
+  return new Promise((resolve) => {
+    const bin = probeBinary()
+    if (!bin || !existsSync(bin)) {
+      resolve({})
+      return
+    }
+    const proc = spawn(bin, [
+      '-v',
+      'quiet',
+      '-print_format',
+      'json',
+      '-show_format',
+      '-show_streams',
+      filePath
+    ])
+    let out = ''
+    proc.stdout.on('data', (d) => {
+      out += d.toString()
+    })
+    proc.on('close', () => {
+      try {
+        const data = JSON.parse(out)
+        const format = data.format || {}
+        const streams: Array<Record<string, unknown>> = data.streams || []
+        const video = streams.find((s) => s.codec_type === 'video')
+        const durationSec = parseFloat(String(format.duration || video?.duration || 0))
+        resolve({
+          durationMs: Number.isFinite(durationSec) && durationSec > 0 ? Math.round(durationSec * 1000) : undefined,
+          width: video?.width ? Number(video.width) : undefined,
+          height: video?.height ? Number(video.height) : undefined
+        })
+      } catch {
+        resolve({})
+      }
+    })
+    proc.on('error', () => resolve({}))
+  })
+}
+
+export async function importFiles(
+  projectDir: string,
+  filePaths?: string[]
+): Promise<Asset[]> {
+  await ensureProjectDirs(projectDir)
+  let paths = filePaths
+  if (!paths || paths.length === 0) {
+    const win = BrowserWindow.getFocusedWindow()
+    const result = await dialog.showOpenDialog(win!, {
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        {
+          name: 'Media',
+          extensions: [
+            'png',
+            'jpg',
+            'jpeg',
+            'webp',
+            'gif',
+            'bmp',
+            'mp4',
+            'mov',
+            'webm',
+            'mkv',
+            'mp3',
+            'wav',
+            'ogg',
+            'm4a',
+            'flac'
+          ]
+        }
+      ]
+    })
+    if (result.canceled || result.filePaths.length === 0) return []
+    paths = result.filePaths
+  }
+
+  const assets: Asset[] = []
+  for (const src of paths) {
+    const id = uid('asset')
+    const ext = extname(src)
+    const destName = `${id}${ext}`
+    const dest = join(projectDir, 'assets', destName)
+    await copyFile(src, dest)
+    const type = detectType(src)
+    const meta = await probeMedia(dest)
+    if ((type === 'image' || type === 'gif') && (!meta.width || !meta.height)) {
+      try {
+        const img = await sharp(dest, { animated: type === 'gif' }).metadata()
+        meta.width = img.width
+        meta.height = img.height
+        if (type === 'gif' && !meta.durationMs) {
+          const pages = img.pages || 1
+          const delays = img.delay || []
+          const total =
+            delays.length > 0 ? delays.reduce((a: number, b: number) => a + b, 0) : pages * 100
+          meta.durationMs = total || 2000
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    if (type === 'gif' && !meta.durationMs) {
+      meta.durationMs = await probeGifDuration(dest)
+    }
+    assets.push({
+      id,
+      name: basename(src),
+      type,
+      path: dest,
+      durationMs: meta.durationMs,
+      width: meta.width,
+      height: meta.height
+    })
+  }
+  return assets
+}
+
+async function probeGifDuration(filePath: string): Promise<number | undefined> {
+  try {
+    // Prefer ffprobe; fallback estimate
+    const meta = await probeMedia(filePath)
+    if (meta.durationMs) return meta.durationMs
+    const buf = await readFile(filePath)
+    // crude: count frame delay blocks is complex; default 2s loop unit
+    void buf
+    return 2000
+  } catch {
+    return 2000
+  }
+}
+
+export async function saveRecording(
+  projectDir: string,
+  buffer: ArrayBuffer,
+  suggestedName?: string
+): Promise<Asset> {
+  await ensureProjectDirs(projectDir)
+  const id = uid('asset')
+  const destName = `${id}.webm`
+  const dest = join(projectDir, 'assets', destName)
+  await writeFile(dest, Buffer.from(buffer))
+  const meta = await probeMedia(dest)
+  return {
+    id,
+    name: suggestedName || `Recording ${new Date().toLocaleTimeString()}`,
+    type: 'audio', // recordings are always audio tracks
+    path: dest,
+    durationMs: meta.durationMs || 1000
+  }
+}
+
+export async function pickExportPath(defaultName = 'export.mp4'): Promise<string | null> {
+  const win = BrowserWindow.getFocusedWindow()
+  const result = await dialog.showSaveDialog(win!, {
+    defaultPath: defaultName,
+    filters: [{ name: 'MP4 Video', extensions: ['mp4'] }]
+  })
+  if (result.canceled || !result.filePath) return null
+  return result.filePath
+}
+
+export async function pickProjectDir(): Promise<string | null> {
+  const win = BrowserWindow.getFocusedWindow()
+  const result = await dialog.showOpenDialog(win!, {
+    properties: ['openDirectory', 'createDirectory']
+  })
+  if (result.canceled || result.filePaths.length === 0) return null
+  return result.filePaths[0]
+}

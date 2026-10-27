@@ -1,0 +1,89 @@
+:root {
+  --bg: #12141a;
+  --bg-panel: #1a1d26;
+  --bg-elevated: #222632;
+  --border: #2e3444;
+  --text: #e8eaf0;
+  --muted: #9aa3b5;
+  --accent: #3d9cf0;
+  --accent-2: #2bb673;
+  --danger: #e25555;
+  --track-video: #2a3a55;
+  --track-audio: #2a4538;
+  --clip-video: #3d7ecf;
+  --clip-audio: #3a9b6a;
+  --clip-gif: #c47a2c;
+  --playhead: #f0c14d;
+  --font: "IBM Plex Sans", "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  overflow: hidden;
+  user-select: none;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 10px;
+}
+
+button:hover {
+  border-color: var(--accent);
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+button.danger {
+  background: transparent;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+input[type='number'],
+input[type='text'] {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
+  width: 100%;
+}
+
+.panel-title {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
