@@ -59,13 +59,23 @@ function onKey(e: KeyboardEvent): void {
   }
 }
 
+let offMenu: (() => void) | null = null
+
+function onMenuCommand(command: 'open' | 'save' | 'saveAs'): void {
+  if (command === 'open') void store.openFromFile()
+  else if (command === 'save') void store.save()
+  else if (command === 'saveAs') void store.saveAs()
+}
+
 onMounted(async () => {
   await store.load()
   window.addEventListener('keydown', onKey)
+  offMenu = window.api.onMenuCommand(onMenuCommand)
 })
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKey)
+  offMenu?.()
 })
 </script>
 

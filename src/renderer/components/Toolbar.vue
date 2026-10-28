@@ -86,7 +86,7 @@ onUnmounted(() => {
         </button>
         <div v-if="fileMenuOpen" class="menu-dropdown" role="menu">
           <button type="button" role="menuitem" @click="onOpen">
-            Open…
+            Open
             <span class="kbd">Ctrl+O</span>
           </button>
           <button type="button" role="menuitem" @click="onSave">
@@ -94,7 +94,7 @@ onUnmounted(() => {
             <span class="kbd">Ctrl+S</span>
           </button>
           <button type="button" role="menuitem" @click="onSaveAs">
-            Save As…
+            Save as
             <span class="kbd">Ctrl+Shift+S</span>
           </button>
         </div>

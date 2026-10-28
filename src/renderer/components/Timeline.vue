@@ -4,7 +4,7 @@ import { useProjectStore } from '../stores/project'
 import type { TrackId } from '@shared/types'
 
 const store = useProjectStore()
-const rulerRef = ref<HTMLElement | null>(null)
+const scrollRef = ref<HTMLElement | null>(null)
 
 const tracks = computed(() => store.project.tracks)
 
@@ -47,16 +47,9 @@ function onDrop(e: DragEvent, trackId: TrackId): void {
   const lane = (e.currentTarget as HTMLElement).querySelector('.lane-body') as HTMLElement
   if (!lane) return
   const rect = lane.getBoundingClientRect()
-  const scrollLeft = rulerRef.value?.scrollLeft || 0
+  const scrollLeft = scrollRef.value?.scrollLeft || 0
   const x = e.clientX - rect.left + scrollLeft
   store.addClipFromAsset(assetId, trackId, xToMs(x))
-}
-
-function seekFromEvent(e: MouseEvent): void {
-  const el = e.currentTarget as HTMLElement
-  const rect = el.getBoundingClientRect()
-  const x = e.clientX - rect.left + el.scrollLeft
-  store.setPlayhead(xToMs(x))
 }
 
 type DragKind = 'move' | 'resize-start' | 'resize-end'
@@ -67,6 +60,59 @@ const drag = ref<{
   originStart: number
   originDuration: number
 } | null>(null)
+
+const scrubbing = ref(false)
+
+function clientXToTimelineMs(clientX: number, bodyEl: HTMLElement): number {
+  const rect = bodyEl.getBoundingClientRect()
+  // bodyEl is the scrolled content; getBoundingClientRect already accounts for scroll
+  const x = clientX - rect.left
+  return Math.max(0, xToMs(x))
+}
+
+function seekFromClientX(clientX: number, bodyEl: HTMLElement): void {
+  store.setPlayhead(clientXToTimelineMs(clientX, bodyEl))
+}
+
+function startScrub(e: PointerEvent, bodyEl: HTMLElement): void {
+  e.preventDefault()
+  e.stopPropagation()
+  store.isPlaying = false
+  scrubbing.value = true
+  seekFromClientX(e.clientX, bodyEl)
+  ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+}
+
+function onScrubMove(e: PointerEvent, bodyEl: HTMLElement): void {
+  if (!scrubbing.value) return
+  seekFromClientX(e.clientX, bodyEl)
+}
+
+function endScrub(): void {
+  scrubbing.value = false
+}
+
+function onRulerPointerDown(e: PointerEvent): void {
+  const ruler = e.currentTarget as HTMLElement
+  startScrub(e, ruler)
+}
+
+function onRulerPointerMove(e: PointerEvent): void {
+  onScrubMove(e, e.currentTarget as HTMLElement)
+}
+
+function onPlayheadPointerDown(e: PointerEvent): void {
+  // Scrub relative to the tracks content width using the scroll area's ruler/lanes
+  const content = (e.currentTarget as HTMLElement).parentElement
+  if (!content) return
+  startScrub(e, content)
+}
+
+function onPlayheadPointerMove(e: PointerEvent): void {
+  const content = (e.currentTarget as HTMLElement).parentElement
+  if (!content) return
+  onScrubMove(e, content)
+}
 
 function startClipDrag(e: PointerEvent, clipId: string, kind: DragKind): void {
   e.stopPropagation()
@@ -107,12 +153,16 @@ function endClipDrag(): void {
 
 function onLanePointerDown(e: PointerEvent, trackId: TrackId): void {
   if ((e.target as HTMLElement).closest('.clip')) return
+  if ((e.target as HTMLElement).closest('.playhead')) return
   const lane = e.currentTarget as HTMLElement
-  const rect = lane.getBoundingClientRect()
-  const x = e.clientX - rect.left
-  store.setPlayhead(xToMs(x))
   store.selectClip(null)
+  startScrub(e, lane)
   void trackId
+}
+
+function onLanePointerMove(e: PointerEvent): void {
+  if (!scrubbing.value || drag.value) return
+  onScrubMove(e, e.currentTarget as HTMLElement)
 }
 
 function zoom(delta: number): void {
@@ -127,8 +177,15 @@ function zoom(delta: number): void {
       <button type="button" @click="zoom(10)">+</button>
       <span class="muted">{{ store.pixelsPerSecond }} px/s</span>
     </div>
-    <div class="timeline-scroll" ref="rulerRef">
-      <div class="ruler" :style="{ width: timelineWidth + 'px' }" @click="seekFromEvent">
+    <div class="timeline-scroll" ref="scrollRef">
+      <div
+        class="ruler"
+        :style="{ width: timelineWidth + 'px' }"
+        @pointerdown="onRulerPointerDown"
+        @pointermove="onRulerPointerMove"
+        @pointerup="endScrub"
+        @pointercancel="endScrub"
+      >
         <div
           v-for="s in Math.ceil(timelineWidth / store.pixelsPerSecond)"
           :key="s"
@@ -137,7 +194,18 @@ function zoom(delta: number): void {
         >
           {{ s }}s
         </div>
-        <div class="playhead" :style="{ left: msToX(store.playheadMs) + 'px' }" />
+        <div
+          class="playhead"
+          :class="{ scrubbing }"
+          :style="{ left: msToX(store.playheadMs) + 'px' }"
+          title="Drag to scrub"
+          @pointerdown="onPlayheadPointerDown"
+          @pointermove="onPlayheadPointerMove"
+          @pointerup="endScrub"
+          @pointercancel="endScrub"
+        >
+          <span class="playhead-head" />
+        </div>
       </div>
 
       <div
@@ -153,6 +221,9 @@ function zoom(delta: number): void {
           class="lane-body"
           :style="{ width: timelineWidth + 'px' }"
           @pointerdown="onLanePointerDown($event, track.id)"
+          @pointermove="onLanePointerMove"
+          @pointerup="endScrub"
+          @pointercancel="endScrub"
         >
           <div
             v-for="clip in store.clipsByTrack[track.id]"
@@ -186,7 +257,15 @@ function zoom(delta: number): void {
               />
             </template>
           </div>
-          <div class="playhead" :style="{ left: msToX(store.playheadMs) + 'px' }" />
+          <div
+            class="playhead lane-playhead"
+            :class="{ scrubbing }"
+            :style="{ left: msToX(store.playheadMs) + 'px' }"
+            @pointerdown="onPlayheadPointerDown"
+            @pointermove="onPlayheadPointerMove"
+            @pointerup="endScrub"
+            @pointercancel="endScrub"
+          />
         </div>
       </div>
     </div>
@@ -227,6 +306,8 @@ function zoom(delta: number): void {
   height: 22px;
   border-bottom: 1px solid var(--border);
   margin-left: 56px;
+  cursor: ew-resize;
+  touch-action: none;
 }
 
 .tick {
@@ -236,6 +317,7 @@ function zoom(delta: number): void {
   font-size: 10px;
   color: var(--muted);
   font-family: var(--mono);
+  pointer-events: none;
 }
 
 .lane {
@@ -266,6 +348,8 @@ function zoom(delta: number): void {
 .lane-body {
   position: relative;
   height: 100%;
+  touch-action: none;
+  cursor: text;
 }
 
 .clip {
@@ -324,11 +408,46 @@ function zoom(delta: number): void {
   position: absolute;
   top: 0;
   bottom: 0;
+  width: 12px;
+  margin-left: -6px;
+  background: transparent;
+  pointer-events: auto;
+  z-index: 5;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.playhead::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 5px;
   width: 2px;
   background: var(--playhead);
+}
+
+.playhead.scrubbing::after,
+.playhead:hover::after {
+  width: 3px;
+  left: 4.5px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+.playhead-head {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  background: var(--playhead);
+  clip-path: polygon(50% 100%, 0 0, 100% 0);
   pointer-events: none;
-  z-index: 5;
-  transform: translateX(-1px);
+}
+
+.lane-playhead .playhead-head {
+  display: none;
 }
 
 .kf {

@@ -25,6 +25,12 @@ const api = {
     const listener = (_: Electron.IpcRendererEvent, p: ExportProgress): void => cb(p)
     ipcRenderer.on('export:progress', listener)
     return () => ipcRenderer.removeListener('export:progress', listener)
+  },
+  onMenuCommand: (cb: (command: 'open' | 'save' | 'saveAs') => void): (() => void) => {
+    const listener = (_: Electron.IpcRendererEvent, command: 'open' | 'save' | 'saveAs'): void =>
+      cb(command)
+    ipcRenderer.on('menu:command', listener)
+    return () => ipcRenderer.removeListener('menu:command', listener)
   }
 }
 

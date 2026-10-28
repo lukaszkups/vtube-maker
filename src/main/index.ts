@@ -14,6 +14,7 @@ import {
 } from './assets'
 import { exportProject } from './export'
 import { listSystemFonts } from './fonts'
+import { setupApplicationMenu } from './menu'
 import type { Project } from '../shared/types'
 import { createEmptyProject } from '../shared/types'
 import { dirname } from 'path'
@@ -85,6 +86,7 @@ app.whenReady().then(async () => {
   projectDir = defaultProjectDir()
   projectFilePath = defaultProjectFile()
   await ensureProjectDirs(projectDir)
+  setupApplicationMenu()
 
   ipcMain.handle('project:getDir', () => projectDir)
   ipcMain.handle('project:getFile', () => projectFilePath)
