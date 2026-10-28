@@ -44,6 +44,11 @@ const filteredAssets = computed(() =>
   store.project.assets.filter((a) => matchesFilter(a, filter.value))
 )
 
+function displayTitle(asset: Asset): string {
+  if (asset.type === 'text' && asset.text?.content) return asset.text.content
+  return asset.name
+}
+
 function onDragStart(e: DragEvent, assetId: string): void {
   e.dataTransfer?.setData('application/x-vtube-asset', assetId)
   e.dataTransfer!.effectAllowed = 'copy'
@@ -142,6 +147,15 @@ function typeLabel(type: AssetType): string {
         @dragstart="onDragStart($event, asset.id)"
         @dblclick="asset.type === 'text' ? openEditText(asset.id) : undefined"
       >
+        <button
+          type="button"
+          class="del"
+          title="Remove from library"
+          @click.stop="requestDelete(asset.id)"
+          @pointerdown.stop
+        >
+          ×
+        </button>
         <div class="thumb" :data-type="asset.type">
           <WaveformThumb
             v-if="asset.type === 'audio' && store.mediaUrls[asset.id]"
@@ -156,21 +170,12 @@ function typeLabel(type: AssetType): string {
           <span v-else class="badge">{{ asset.type }}</span>
         </div>
         <div class="meta">
-          <div class="name" :title="asset.name">{{ asset.name }}</div>
+          <div class="name" :title="displayTitle(asset)">{{ displayTitle(asset) }}</div>
           <div class="sub">
             {{ typeLabel(asset.type) }}
             <template v-if="asset.durationMs"> · {{ Math.round(asset.durationMs / 100) / 10 }}s</template>
           </div>
         </div>
-        <button
-          type="button"
-          class="del"
-          title="Remove from library"
-          @click.stop="requestDelete(asset.id)"
-          @pointerdown.stop
-        >
-          ×
-        </button>
       </li>
     </ul>
     <p v-else-if="store.project.assets.length" class="empty">
@@ -210,6 +215,7 @@ function typeLabel(type: AssetType): string {
   padding: 12px;
   overflow: auto;
   min-height: 0;
+  min-width: 0;
 }
 
 .head {
@@ -256,21 +262,22 @@ function typeLabel(type: AssetType): string {
   list-style: none;
   margin: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
   gap: 8px;
 }
 
 .item {
-  display: grid;
-  grid-template-columns: 56px 1fr 24px;
-  gap: 8px;
-  padding: 6px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
   border-radius: 6px;
   background: var(--bg-elevated);
   border: 1px solid transparent;
   cursor: grab;
-  align-items: center;
+  min-width: 0;
 }
 
 .item:hover {
@@ -278,8 +285,8 @@ function typeLabel(type: AssetType): string {
 }
 
 .thumb {
-  width: 56px;
-  height: 40px;
+  width: 100%;
+  aspect-ratio: 16 / 10;
   border-radius: 4px;
   overflow: hidden;
   background: #0d0f14;
@@ -300,32 +307,49 @@ function typeLabel(type: AssetType): string {
 }
 
 .badge.text {
-  font-size: 16px;
+  font-size: 22px;
   font-weight: 700;
   text-transform: none;
   color: var(--playhead);
 }
 
+.meta {
+  min-width: 0;
+}
+
 .name {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   font-weight: 600;
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  overflow: hidden;
+  max-height: calc(1.35em * 4);
 }
 
 .sub {
   color: var(--muted);
   font-size: 11px;
+  margin-top: 2px;
 }
 
 .del {
-  width: 24px;
-  height: 24px;
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
   padding: 0;
   line-height: 1;
   color: var(--muted);
   border-color: transparent;
-  background: transparent;
+  background: rgba(18, 20, 26, 0.75);
+  z-index: 1;
 }
 
 .del:hover {

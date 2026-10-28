@@ -1,13 +1,43 @@
 import { ref } from 'vue'
 import { useProjectStore } from '../stores/project'
 
+export type AudioInputDevice = {
+  deviceId: string
+  label: string
+}
+
 type StartOpts = {
   autoSave?: boolean
+  deviceId?: string
   onStop?: (buffer: ArrayBuffer) => void
 }
 
 type StopOpts = {
   discard?: boolean
+}
+
+export async function listAudioInputDevices(): Promise<AudioInputDevice[]> {
+  if (!navigator.mediaDevices?.enumerateDevices) return []
+
+  // Labels are often empty until permission has been granted once
+  let devices = await navigator.mediaDevices.enumerateDevices()
+  const hasLabels = devices.some((d) => d.kind === 'audioinput' && d.label)
+  if (!hasLabels) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      stream.getTracks().forEach((t) => t.stop())
+      devices = await navigator.mediaDevices.enumerateDevices()
+    } catch {
+      /* keep unlabeled list */
+    }
+  }
+
+  return devices
+    .filter((d) => d.kind === 'audioinput')
+    .map((d, i) => ({
+      deviceId: d.deviceId,
+      label: d.label || `Microphone ${i + 1}`
+    }))
 }
 
 export function useAudioRecorder() {
@@ -32,7 +62,10 @@ export function useAudioRecorder() {
     startOpts = opts
     discardOnStop = false
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const audioConstraint: boolean | MediaTrackConstraints = opts.deviceId
+        ? { deviceId: { exact: opts.deviceId } }
+        : true
+      stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraint })
       chunks = []
       const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'

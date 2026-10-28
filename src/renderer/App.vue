@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted } from 'vue'
 import { useProjectStore } from './stores/project'
+import { usePanelLayout } from './composables/usePanelLayout'
 import Toolbar from './components/Toolbar.vue'
 import MediaLibrary from './components/MediaLibrary.vue'
 import PreviewPanel from './components/PreviewPanel.vue'
@@ -9,6 +10,7 @@ import Timeline from './components/Timeline.vue'
 import ExportOverlay from './components/ExportOverlay.vue'
 
 const store = useProjectStore()
+const { leftWidth, rightWidth, timelineHeight, startResize } = usePanelLayout()
 
 function onKey(e: KeyboardEvent): void {
   const meta = e.metaKey || e.ctrlKey
@@ -82,12 +84,39 @@ onUnmounted(() => {
 <template>
   <div class="app-shell">
     <Toolbar />
-    <div class="main-row">
-      <MediaLibrary />
-      <PreviewPanel />
-      <Inspector />
+    <div
+      class="workspace"
+      :style="{
+        gridTemplateRows: `minmax(0, 1fr) 5px ${timelineHeight}px`
+      }"
+    >
+      <div
+        class="main-row"
+        :style="{
+          gridTemplateColumns: `${leftWidth}px 5px minmax(0, 1fr) 5px ${rightWidth}px`
+        }"
+      >
+        <MediaLibrary />
+        <div
+          class="splitter col"
+          title="Drag to resize"
+          @pointerdown="startResize('left', $event)"
+        />
+        <PreviewPanel />
+        <div
+          class="splitter col"
+          title="Drag to resize"
+          @pointerdown="startResize('right', $event)"
+        />
+        <Inspector />
+      </div>
+      <div
+        class="splitter row"
+        title="Drag to resize timeline"
+        @pointerdown="startResize('timeline', $event)"
+      />
+      <Timeline />
     </div>
-    <Timeline />
     <ExportOverlay />
   </div>
 </template>
@@ -95,7 +124,7 @@ onUnmounted(() => {
 <style scoped>
 .app-shell {
   display: grid;
-  grid-template-rows: 48px minmax(0, 1fr) 280px;
+  grid-template-rows: 48px minmax(0, 1fr);
   height: 100%;
   background:
     radial-gradient(1200px 600px at 10% -10%, #1c2436 0%, transparent 55%),
@@ -103,13 +132,37 @@ onUnmounted(() => {
     var(--bg);
 }
 
+.workspace {
+  display: grid;
+  min-height: 0;
+}
+
 .main-row {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr) 280px;
-  gap: 1px;
   min-height: 0;
   background: var(--border);
   border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
+}
+
+.splitter {
+  background: var(--border);
+  position: relative;
+  z-index: 3;
+  transition: background 0.12s ease;
+}
+
+.splitter:hover,
+.splitter:active {
+  background: var(--accent);
+}
+
+.splitter.col {
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.splitter.row {
+  cursor: row-resize;
+  touch-action: none;
 }
 </style>

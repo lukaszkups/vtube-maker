@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useAudioRecorder } from '../composables/useAudioRecorder'
+import {
+  listAudioInputDevices,
+  useAudioRecorder,
+  type AudioInputDevice
+} from '../composables/useAudioRecorder'
 
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{
@@ -12,6 +16,9 @@ const { isRecording, error, start, stop, saveBuffer } = useAudioRecorder()
 const elapsedMs = ref(0)
 const saving = ref(false)
 const pendingBuffer = ref<ArrayBuffer | null>(null)
+const devices = ref<AudioInputDevice[]>([])
+const selectedDeviceId = ref('')
+const loadingDevices = ref(false)
 let tickTimer: ReturnType<typeof setInterval> | null = null
 
 const elapsedLabel = computed(() => {
@@ -23,6 +30,26 @@ const elapsedLabel = computed(() => {
 
 const hasTake = computed(() => !!pendingBuffer.value)
 
+async function refreshDevices(): Promise<void> {
+  loadingDevices.value = true
+  try {
+    const list = await listAudioInputDevices()
+    devices.value = list
+    if (!list.length) {
+      selectedDeviceId.value = ''
+      return
+    }
+    const stillThere = list.some((d) => d.deviceId === selectedDeviceId.value)
+    if (!stillThere) {
+      selectedDeviceId.value = list[0].deviceId
+    }
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'Could not list microphones'
+  } finally {
+    loadingDevices.value = false
+  }
+}
+
 watch(
   () => props.open,
   (open) => {
@@ -32,6 +59,7 @@ watch(
       elapsedMs.value = 0
       pendingBuffer.value = null
       error.value = null
+      void refreshDevices()
     }
   }
 )
@@ -56,6 +84,7 @@ async function onStart(): Promise<void> {
   elapsedMs.value = 0
   await start({
     autoSave: false,
+    deviceId: selectedDeviceId.value || undefined,
     onStop: (buffer) => {
       pendingBuffer.value = buffer
       stopTick()
@@ -77,7 +106,6 @@ async function onSave(): Promise<void> {
     await saveBuffer(buffer)
     pendingBuffer.value = null
     saving.value = false
-    // Close after successful save (parent also listens to @saved)
     emit('saved')
     emit('close')
   } catch (e) {
@@ -109,9 +137,36 @@ async function onClose(): Promise<void> {
 
       <div class="body">
         <p class="hint">
-          Recording starts only when you press Start. Stop when finished, then add the take to the
+          Choose an input device, then press Start. Stop when finished and add the take to the
           media library as MP3.
         </p>
+
+        <label class="device-field">
+          <span>Microphone</span>
+          <div class="device-row">
+            <select
+              v-model="selectedDeviceId"
+              :disabled="isRecording || loadingDevices || !devices.length"
+            >
+              <option v-if="!devices.length" value="">
+                {{ loadingDevices ? 'Loading devices…' : 'No microphones found' }}
+              </option>
+              <option v-for="d in devices" :key="d.deviceId" :value="d.deviceId">
+                {{ d.label }}
+              </option>
+            </select>
+            <button
+              type="button"
+              class="refresh"
+              :disabled="isRecording || loadingDevices"
+              title="Refresh device list"
+              @click="refreshDevices"
+            >
+              Refresh
+            </button>
+          </div>
+        </label>
+
         <div class="timer" :class="{ live: isRecording }">{{ elapsedLabel }}</div>
         <p v-if="error" class="err">{{ error }}</p>
         <p v-else-if="isRecording" class="status live">Recording…</p>
@@ -120,7 +175,13 @@ async function onClose(): Promise<void> {
       </div>
 
       <footer>
-        <button v-if="!isRecording" type="button" class="primary" @click="onStart">
+        <button
+          v-if="!isRecording"
+          type="button"
+          class="primary"
+          :disabled="!selectedDeviceId && devices.length > 0"
+          @click="onStart"
+        >
           {{ hasTake ? 'Re-record' : 'Start' }}
         </button>
         <button v-else type="button" class="danger" @click="onStop">Stop</button>
@@ -149,7 +210,7 @@ async function onClose(): Promise<void> {
 }
 
 .modal {
-  width: min(420px, 94vw);
+  width: min(440px, 94vw);
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -179,6 +240,36 @@ header h3 {
   line-height: 1.4;
   margin: 0 0 14px;
   text-align: left;
+}
+
+.device-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  margin-bottom: 14px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.device-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+}
+
+.device-field select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  color: var(--text);
+  font: inherit;
+  width: 100%;
+}
+
+.refresh {
+  white-space: nowrap;
 }
 
 .timer {
